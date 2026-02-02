@@ -1,9 +1,9 @@
 package com.example.animall.data.modelo
 
 data class Producto(
-    val id: Int,
+    val id: Long,
     val nombre: String,
+    val precio: Double,
     val categoria: String,
-    val precio: Int,
-    val imagenUrl: String
+    val imagenUrl: String? = null
 )

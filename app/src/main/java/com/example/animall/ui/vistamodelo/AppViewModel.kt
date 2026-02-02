@@ -2,8 +2,15 @@ package com.example.animall.ui.vistamodelo
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.animall.data.modelo.ItemCarrito
+import com.example.animall.data.modelo.PedidoResponse
 import com.example.animall.data.modelo.Producto
+import com.example.animall.data.remoto.AgregarItemCarritoBody
+import com.example.animall.data.remoto.ActualizarItemCarritoBody
+import com.example.animall.data.remoto.ConfirmarPedidoBody
+import com.example.animall.data.remoto.RetrofitClient
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -21,46 +28,125 @@ data class Usuario(
 
 class AppViewModel : ViewModel() {
 
+    private val USUARIO_CLIENTE_ID = 1L
+    private val USUARIO_ADMIN_ID = 2L
+    private val DIRECCION_CLIENTE_ID = 1L
+    private val METODO_PAGO_CLIENTE_ID = 1L
+
     // --- USUARIO ---
     private val _usuarioActual = MutableStateFlow<Usuario?>(null)
     val usuarioActual: StateFlow<Usuario?> = _usuarioActual
     private val _usuariosRegistrados = mutableListOf<Usuario>()
 
     // --- PRODUCTOS ---
-    private val _productos = MutableStateFlow(
-        listOf(
-            Producto(1, "Collar Premium", "Accesorios", 15000, ""),
-            Producto(2, "Alimento Perro 15kg", "Alimentos", 45000, ""),
-            Producto(3, "Juguete Hueso", "Juguetes", 5990, ""),
-            Producto(4, "Rascador Gato", "Accesorios", 25000, ""),
-            Producto(5, "Alimento Gato 3kg", "Alimentos", 12000, "")
-        )
-    )
+    private val _productos = MutableStateFlow<List<Producto>>(emptyList())
+
+    init {
+        cargarProductos()
+        cargarCarrito()
+    }
+
+    private fun cargarProductos() {
+        viewModelScope.launch {
+            try {
+                _productos.value = RetrofitClient.apiService.getProductos()
+            } catch (e: Exception) {
+                _productos.value = emptyList()
+            }
+        }
+    }
+
+    fun recargarProductos() {
+        cargarProductos()
+    }
 
     // --- CARRITO DE COMPRAS (NUEVO) ---
-    private val _carrito = MutableStateFlow<List<Producto>>(emptyList())
-    val carrito: StateFlow<List<Producto>> = _carrito
+    private val _carrito = MutableStateFlow<List<ItemCarrito>>(emptyList())
+    val carrito: StateFlow<List<ItemCarrito>> = _carrito
+
+    private val _pedidoConfirmado = MutableStateFlow<PedidoResponse?>(null)
+    val pedidoConfirmado: StateFlow<PedidoResponse?> = _pedidoConfirmado
+
+    private fun cargarCarrito() {
+        viewModelScope.launch {
+            try {
+                _carrito.value = RetrofitClient.apiService.getCarrito(USUARIO_CLIENTE_ID)
+            } catch (e: Exception) {
+                _carrito.value = emptyList()
+            }
+        }
+    }
 
     // Calculamos el total automáticamente cada vez que cambia el carrito
-    val totalCarrito: StateFlow<Int> = _carrito.map { lista ->
-        lista.sumOf { it.precio }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0)
+    val totalCarrito: StateFlow<Double> = _carrito.map { lista ->
+        lista.sumOf { it.subtotal }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(), 0.0)
 
-    fun agregarAlCarrito(producto: Producto) {
-        // Añadimos el producto a la lista actual
-        _carrito.value = _carrito.value + producto
+    fun confirmarPedido() {
+        viewModelScope.launch {
+            try {
+                val respuesta = RetrofitClient.apiService.confirmarPedido(
+                    usuarioId = USUARIO_CLIENTE_ID,
+                    body = ConfirmarPedidoBody(direccionId = DIRECCION_CLIENTE_ID, metodoPagoId = METODO_PAGO_CLIENTE_ID)
+                )
+                _pedidoConfirmado.value = respuesta
+                cargarCarrito()
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    fun agregarProductoAlCarrito(productoId: Long) {
+        viewModelScope.launch {
+            try {
+                RetrofitClient.apiService.agregarItemCarrito(
+                    usuarioId = USUARIO_CLIENTE_ID,
+                    body = AgregarItemCarritoBody(productoId = productoId, cantidad = 1)
+                )
+                cargarCarrito()
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    fun actualizarCantidadItem(itemId: Long, cantidad: Int) {
+        viewModelScope.launch {
+            try {
+                RetrofitClient.apiService.actualizarItemCarrito(
+                    usuarioId = USUARIO_CLIENTE_ID,
+                    itemId = itemId,
+                    body = ActualizarItemCarritoBody(cantidad = cantidad)
+                )
+                cargarCarrito()
+            } catch (e: Exception) {
+                // No hacer nada especial
+            }
+        }
+    }
+
+    fun eliminarItemCarrito(itemId: Long) {
+        viewModelScope.launch {
+            try {
+                RetrofitClient.apiService.eliminarItemCarrito(
+                    usuarioId = USUARIO_CLIENTE_ID,
+                    itemId = itemId
+                )
+                cargarCarrito()
+            } catch (e: Exception) {
+                // No hacer nada especial
+            }
+        }
     }
 
     fun vaciarCarrito() {
-        // Se usa al pagar
-        _carrito.value = emptyList()
-    }
-
-    fun quitarDelCarrito(producto: Producto) {
-        // Elimina solo la primera instancia de ese producto encontrada
-        val listaMutable = _carrito.value.toMutableList()
-        listaMutable.remove(producto)
-        _carrito.value = listaMutable
+        viewModelScope.launch {
+            try {
+                RetrofitClient.apiService.vaciarCarrito(usuarioId = USUARIO_CLIENTE_ID)
+                cargarCarrito()
+            } catch (e: Exception) {
+                // No hacer nada especial
+            }
+        }
     }
 
     // --- FILTROS Y BÚSQUEDA ---
@@ -108,19 +194,19 @@ class AppViewModel : ViewModel() {
 
     // --- CRUD ADMIN ---
     fun agregarProducto(nombre: String, precio: String, categoria: String) {
-        val precioInt = precio.toIntOrNull() ?: 0
-        val nuevoId = (_productos.value.maxOfOrNull { it.id } ?: 0) + 1
-        _productos.value = _productos.value + Producto(nuevoId, nombre, categoria, precioInt, "")
+        val precioDouble = precio.toDoubleOrNull() ?: 0.0
+        val nuevoId = (_productos.value.maxOfOrNull { it.id } ?: 0L) + 1L
+        _productos.value = _productos.value + Producto(nuevoId, nombre, precioDouble, categoria)
     }
 
-    fun actualizarProducto(id: Int, nombre: String, precio: String, categoria: String) {
-        val precioInt = precio.toIntOrNull() ?: 0
+    fun actualizarProducto(id: Long, nombre: String, precio: String, categoria: String) {
+        val precioDouble = precio.toDoubleOrNull() ?: 0.0
         _productos.value = _productos.value.map {
-            if (it.id == id) it.copy(nombre = nombre, precio = precioInt, categoria = categoria) else it
+            if (it.id == id) it.copy(nombre = nombre, precio = precioDouble, categoria = categoria) else it
         }
     }
 
-    fun eliminarProducto(id: Int) {
+    fun eliminarProducto(id: Long) {
         _productos.value = _productos.value.filter { it.id != id }
     }
 
